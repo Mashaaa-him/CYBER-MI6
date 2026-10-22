@@ -1,0 +1,11 @@
+# CYBER-MI6 requirements so far - covers models.py, db.py, storage.py and their tests.
+# Python 3.11 or newer is required (db.py relies on datetime.fromisoformat accepting "Z").
+#
+# Tested with pydantic 2.13.5 and pytest 9 on Python 3.13. Lower bounds below are
+# the minimum the code is written against, not versions it has been run on.
+
+# --- runtime ---------------------------------------------------------------
+pydantic>=2.5,<3
+
+# --- tests -----------------------------------------------------------------
+pytest>=8
