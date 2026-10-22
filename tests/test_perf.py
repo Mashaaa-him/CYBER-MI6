@@ -9,8 +9,8 @@ from datetime import timedelta
 
 import pytest
 
-from app import storage as st
-from app.models import EventIn
+from backend import storage as st
+from backend.models import EventIn
 from tests.conftest import NOW
 
 N_EVENTS = 100_000
@@ -19,7 +19,7 @@ BUDGET_MS = 50  # per indexed window query; typical results are far below this
 
 @pytest.fixture(scope="module")
 def big_db(tmp_path_factory):
-    from app.db import open_database
+    from backend.db import open_database
 
     db = open_database(tmp_path_factory.mktemp("perf") / "perf.db")
     rng = random.Random(42)

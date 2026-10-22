@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from app.db import Database, from_db_ts, open_database, to_db_ts
+from backend.db import Database, from_db_ts, open_database, to_db_ts
 from tests.conftest import NOW
 
 

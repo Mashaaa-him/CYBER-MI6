@@ -6,8 +6,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.db import open_database  # noqa: E402
-from app.models import AlertIn, EventIn  # noqa: E402
+from backend.db import open_database  # noqa: E402
+from backend.models import AlertIn, EventIn  # noqa: E402
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)  # fixed, safely in the past (models reject future timestamps)
 
