@@ -11,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException  as StarletteHTTPException
 
-from app import storage
 from app.config import get_settings
 from app.db import open_database
 from app.ratelimit import SlidingWindowLimiter
@@ -32,6 +31,7 @@ def error_response(status: int, code: str, detail, headers=None) -> JSONResponse
     )
     
 async def _retention_loop(db, retention_days: int) -> None:
+    from app import storage #imported here so main.py loads before storage.py is merged
     while True:
         try:
             removed= await run_in_threadpool(storage.purge_old_events, db, retention_days)
