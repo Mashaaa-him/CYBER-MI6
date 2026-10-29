@@ -9,10 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from starlette.exceptions import HTTPException  as StarletteHTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
-from app.db import open_database
 from app.ratelimit import SlidingWindowLimiter
 from app.routes import ws
 
@@ -23,29 +22,33 @@ RETENTION_INTERVAL_SECONDS = 3600
 
 
 def error_response(status: int, code: str, detail, headers=None) -> JSONResponse:
-    """Every error the API returns has this shape: {"error": ..., "detail": ...}"""
+    """Every error the API returns has this shape: {"error": ..., "detail": ...}."""
     return JSONResponse(
         content={"error": code, "detail": detail},
-        status_code= status,
+        status_code=status,
         headers=headers,
     )
-    
+
+
 async def _retention_loop(db, retention_days: int) -> None:
-    from app import storage #imported here so main.py loads before storage.py is merged
+    from app import storage  # imported here until storage.py is merged
+
     while True:
         try:
-            removed= await run_in_threadpool(storage.purge_old_events, db, retention_days)
+            removed = await run_in_threadpool(storage.purge_old_events, db, retention_days)
             if removed:
-                log.info("Reception removed %d old events", removed)
+                log.info("Retention removed %d old events", removed)
         except Exception:
             log.exception("Retention job failed; will retry")
         await asyncio.sleep(RETENTION_INTERVAL_SECONDS)
-        
-        
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.db import open_database  # imported here until db.py is merged
+
     settings = get_settings()
-    db = open_database(settings.database_path) #creates the file and tables
+    db = open_database(settings.database_path)
     app.state.db = db
     app.state.ingest_limiter = SlidingWindowLimiter(
         settings.ingest_rate_limit, settings.ingest_rate_window_seconds
@@ -58,16 +61,17 @@ async def lifespan(app: FastAPI):
         with suppress(asyncio.CancelledError):
             await retention
         db.close()
-        
-        
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="CYBER-MI6 API",
         version="1.0.0",
-        description="Event ingenstion, alerts, and live dashboard feed.",
+        description="Event ingestion, alerts, and live dashboard feed.",
         lifespan=lifespan,
     )
+
     if settings.origins_list:
         app.add_middleware(
             CORSMiddleware,
@@ -75,24 +79,24 @@ def create_app() -> FastAPI:
             allow_methods=["GET", "POST", "PATCH"],
             allow_headers=["Content-Type", "X-API-Key"],
         )
-        
+
     @app.exception_handler(RequestValidationError)
-    async def validation_handler(request: RequestValidationError):
+    async def validation_handler(request: Request, exc: RequestValidationError):
         errors = [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]
         return error_response(422, "validation_error", errors)
-    
+
     @app.exception_handler(StarletteHTTPException)
     async def http_handler(request: Request, exc: StarletteHTTPException):
         return error_response(exc.status_code, f"http_{exc.status_code}", exc.detail, exc.headers)
-    
+
     app.include_router(ws.router)
-    #Add the events, alerts and stats routers here as each on is merged.
-    
-    #Mounted last, so the static files can't shadow API routes.
+    # Events, alerts and stats routers are added here as each one is merged.
+
+    # Mounted last, so static files can't shadow API routes.
     if WEB_DIR.is_dir():
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
-        
+
     return app
 
+
 app = create_app()
-    
