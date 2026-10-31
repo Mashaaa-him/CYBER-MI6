@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -36,11 +37,14 @@ def error_response(status: int, code: str, detail, headers=None) -> JSONResponse
     )
 
 
-async def _retention_loop(db, retention_days: int) -> None:
+async def _retention_loop(db, retention_days: int, executor: ThreadPoolExecutor) -> None:
     from backend import storage
+    loop = asyncio.get_running_loop()
     while True:
         try:
-            removed = await run_in_threadpool(storage.purge_old_events, db, retention_days)
+            # Own single-thread executor (not the shared threadpool) so shutdown can WAIT for
+            # an in-flight purge. Cancelling this task does not stop a running thread.
+            removed = await loop.run_in_executor(executor, storage.purge_old_events, db, retention_days)
             if removed:
                 log.info("Retention removed %d old events", removed)
         except Exception:
@@ -56,17 +60,20 @@ async def lifespan(app: FastAPI):
     app.state.ingest_limiter = SlidingWindowLimiter(
         settings.ingest_rate_limit, settings.ingest_rate_window_seconds
     )
-    retention = asyncio.create_task(_retention_loop(db, settings.event_retention_days))
+    retention_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="retention")
+    retention = asyncio.create_task(
+        _retention_loop(db, settings.event_retention_days, retention_executor)
+    )
     try:
         yield
     finally:
         retention.cancel()
         with suppress(asyncio.CancelledError):
             await retention
-        # Give any in-flight threadpool work (purge_old_events) a moment to finish
-        # before we close the DB connections.  The retention loop sleeps for an hour
-        # between runs, so cancellation almost always hits the sleep, not the purge.
-        await asyncio.sleep(0)
+        # Wait for an in-flight purge_old_events to finish BEFORE closing the connections:
+        # closing a SQLite connection while another thread is inside a statement crashes
+        # the interpreter (segfault). shutdown(wait=True) blocks until that thread is done.
+        await run_in_threadpool(retention_executor.shutdown, True)
         db.close()
 
 
