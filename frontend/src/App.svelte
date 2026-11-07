@@ -5,46 +5,81 @@
   import { displayedConnection, feed } from './lib/live';
   import { location } from './lib/router';
   import { startLive } from './lib/ws';
+  import { auth } from './lib/auth';
+  
   import AlertDetail from './views/AlertDetail.svelte';
   import Alerts from './views/Alerts.svelte';
   import Events from './views/Events.svelte';
   import NotFound from './views/NotFound.svelte';
   import Overview from './views/Overview.svelte';
+  
+  import Login from './views/Login.svelte';
+  import AdminDashboard from './views/AdminDashboard.svelte';
+  import UserProfileSettings from './views/UserProfileSettings.svelte';
 
   const route = $derived($location.route);
-  // Figma header: "Last event 2s ago" = the newest event in the live feed.
   const lastEventAt = $derived($feed.find((i) => i.kind === 'event')?.at ?? null);
 
-  onMount(startLive);
+  onMount(() => {
+    auth.init();
+    if ($auth.isAuthenticated) {
+      startLive();
+    }
+  });
+
+  $effect(() => {
+    if ($auth.isAuthenticated) {
+      startLive();
+    }
+  });
 </script>
 
-<DevScenarioNotice />
-<!-- Figma Data states: the header switches to Offline when the API is unreachable. -->
-<AppHeader
-  connection={$displayedConnection}
-  {lastEventAt}
-  back={route.name === 'alert-detail' ? { href: '#/alerts', label: 'Alerts' } : undefined}
-/>
+{#if !$auth.isAuthenticated}
+  <main class="auth-layout">
+    <Login />
+  </main>
+{:else}
+  <DevScenarioNotice />
+  <AppHeader
+    connection={$displayedConnection}
+    {lastEventAt}
+    back={route.name === 'alert-detail' ? { href: '#/alerts', label: 'Alerts' } : undefined}
+  />
 
-<main class="content">
-  {#if route.name === 'overview'}
-    <Overview />
-  {:else if route.name === 'alerts'}
-    <Alerts />
-  {:else if route.name === 'alert-detail'}
-    <AlertDetail id={route.id} />
-  {:else if route.name === 'events'}
-    <Events />
-  {:else}
-    <NotFound path={route.path} />
-  {/if}
-</main>
+ <main class="content">
+    {#if route.name === 'overview'}
+      <Overview />
+    {:else if route.name === 'alerts'}
+      <Alerts />
+    {:else if route.name === 'alert-detail'}
+      <AlertDetail id={route.id} />
+    {:else if route.name === 'events'}
+      <Events />
+    {:else if route.name === 'admin'}
+      {#if $auth.user?.role === 'admin'}
+        <AdminDashboard />
+      {:else}
+        <NotFound path="Unauthorized Access: Admin Only" />
+      {/if}
+    {:else if route.name === 'profile'}
+      <UserProfileSettings />
+    {:else if route.name === 'not-found'}
+      <NotFound path={route.path} />
+    {/if}
+  </main>
+{/if}
 
 <style>
   .content {
     max-width: 1440px;
     margin: 0 auto;
     padding: var(--spacing-xl);
+  }
+  .auth-layout {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
   }
   @media (max-width: 640px) {
     .content {
