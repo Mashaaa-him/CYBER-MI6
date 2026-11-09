@@ -13,7 +13,6 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
-from app.db import open_database
 from app.ratelimit import SlidingWindowLimiter
 
 log = logging.getLogger(__name__)
@@ -21,15 +20,27 @@ log = logging.getLogger(__name__)
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 RETENTION_INTERVAL_SECONDS = 3600
 
+# (module name under app/routes, URL prefix). Each module must expose `router`.
+ROUTE_MODULES = [
+    ("ws", ""),
+    ("events", "/api"),
+    ("alerts", "/api"),
+    ("stats", "/api"),
+]
+
+
 def error_response(status: int, code: str, detail, headers=None) -> JSONResponse:
+    """Every error the API returns has this shape: {"error": ..., "detail": ...}."""
     return JSONResponse(
         content={"error": code, "detail": detail},
         status_code=status,
         headers=headers,
     )
-    
+
+
 async def _retention_loop(db, retention_days: int) -> None:
-    from app import storage 
+    from app import storage  # imported here until storage is needed at module level
+
     while True:
         try:
             removed = await run_in_threadpool(storage.purge_old_events, db, retention_days)
@@ -38,11 +49,14 @@ async def _retention_loop(db, retention_days: int) -> None:
         except Exception:
             log.exception("Retention job failed; will retry")
         await asyncio.sleep(RETENTION_INTERVAL_SECONDS)
-        
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.db import open_database  # imported here so main.py loads without db.py
+
     settings = get_settings()
-    db = open_database(settings.database_path) 
+    db = open_database(settings.database_path)
     app.state.db = db
     app.state.ingest_limiter = SlidingWindowLimiter(
         settings.ingest_rate_limit, settings.ingest_rate_window_seconds
@@ -55,7 +69,24 @@ async def lifespan(app: FastAPI):
         with suppress(asyncio.CancelledError):
             await retention
         db.close()
-        
+
+
+def _include_routes(app: FastAPI) -> None:
+    for name, prefix in ROUTE_MODULES:
+        try:
+            module = importlib.import_module(f"app.routes.{name}")
+        except ModuleNotFoundError as exc:
+            if exc.name == f"app.routes.{name}":
+                log.warning("Route module app.routes.%s not found; skipping", name)
+                continue
+            raise  # a missing dependency inside a route file is a real error
+        router = getattr(module, "router", None)
+        if router is None:
+            log.warning("app.routes.%s has no `router`; skipping", name)
+            continue
+        app.include_router(router, prefix=prefix)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
@@ -64,7 +95,7 @@ def create_app() -> FastAPI:
         description="Event ingestion, alerts, and live dashboard feed.",
         lifespan=lifespan,
     )
-    
+
     if settings.origins_list:
         app.add_middleware(
             CORSMiddleware,
@@ -72,40 +103,23 @@ def create_app() -> FastAPI:
             allow_methods=["GET", "POST", "PATCH"],
             allow_headers=["Content-Type", "X-API-Key"],
         )
-        
+
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError):
         errors = [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]
         return error_response(422, "validation_error", errors)
-    
+
     @app.exception_handler(StarletteHTTPException)
     async def http_handler(request: Request, exc: StarletteHTTPException):
         return error_response(exc.status_code, f"http_{exc.status_code}", exc.detail, exc.headers)
-    
-    # Safely load available routes dynamically without crashing
-    route_modules = {
-        "ws": "",
-        "websocket": "",
-        "events": "/api",
-        "alerts": "/api",
-        "stats": "/api",
-        "users": "/api",
-        "auth": "/api"
-    }
 
-    for mod_name, prefix in route_modules.items():
-        try:
-            mod = importlib.import_module(f"app.routes.{mod_name}")
-            # Check for a router variable in the file
-            router = getattr(mod, "router", None) or getattr(mod, f"{mod_name}_router", None)
-            if router:
-                app.include_router(router, prefix=prefix)
-        except ImportError:
-            pass
-            
+    _include_routes(app)
+
+    # Mounted last, so static files can't shadow API routes.
     if WEB_DIR.is_dir():
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
-        
+
     return app
+
 
 app = create_app()
